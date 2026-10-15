@@ -53,7 +53,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
-          merged=$(gh pr view 12 --repo AKCodez/hackingtool-plugin --json merged -q '.merged' 2>/dev/null || echo "unknown")
+          # REST read of public upstream PR works with the default workflow token
+          # (GraphQL via `gh pr view` can return empty across repos).
+          merged=$(gh api repos/AKCodez/hackingtool-plugin/pulls/12 --jq '.merged' 2>/dev/null || echo "unknown")
           echo "Upstream PR #12 merged=${merged}"
           if [ "$merged" = "true" ]; then
             open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
