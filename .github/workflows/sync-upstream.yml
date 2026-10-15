@@ -1,0 +1,67 @@
+name: Sync upstream & watch PR
+
+# Keeps this fork's main current with AKCodez/hackingtool-plugin while preserving
+# the local patch that sits on top, and flags when the upstream PR merges so the
+# fork can be retired. Runs weekly and on demand.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge upstream/main into main (keep local patch)
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/AKCodez/hackingtool-plugin.git
+          git fetch upstream --quiet
+          git checkout main
+          if git merge --no-edit upstream/main; then
+            git push origin main
+            echo "Sync OK (or already up to date)."
+          else
+            echo "::error::Merge conflict with upstream/main — resolve the fork manually (upstream likely edited the patched lines)."
+            git merge --abort || true
+            exit 1
+          fi
+
+      - name: Watch upstream PR #12 → flag fork for retirement
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          merged=$(gh pr view 12 --repo AKCodez/hackingtool-plugin --json merged -q '.merged' 2>/dev/null || echo "unknown")
+          echo "Upstream PR #12 merged=${merged}"
+          if [ "$merged" = "true" ]; then
+            open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                    --search 'Upstream PR merged in:title' --json number -q 'length' 2>/dev/null || echo 0)
+            if [ "${open:-0}" = "0" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" \
+                --title "Upstream PR merged — retire fork" \
+                --body "AKCodez/hackingtool-plugin#12 has merged upstream. The local patch is now in upstream, so this fork is no longer needed. Repoint the Claude Code marketplace back to AKCodez/hackingtool-plugin (claude plugin marketplace remove hackingtool-marketplace && claude plugin marketplace add AKCodez/hackingtool-plugin && reinstall), then this fork can be deleted." \
+                2>/dev/null || echo "Could not open issue (non-fatal)."
+            fi
+          fi
